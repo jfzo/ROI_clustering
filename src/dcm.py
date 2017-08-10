@@ -1,0 +1,173 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.linalg import toeplitz, expm
+import random as rn
+
+def get_stimulus(N_pts=200, TR=1, nblocks=5, duration_range=(1,3), dist_opt='random'):
+    ''' This function generates a pattern of stimulus '''
+    if dist_opt == 'random':
+        timeline = np.arange(0, TR * N_pts, TR)    
+        time_offset = 10
+        possible_onsets = np.arange(time_offset, N_pts-time_offset)
+        sep_bwn_ons = 10
+        durations = []
+        onsets = []
+        for i in range(nblocks):
+            current_block_duration = rn.randint(duration_range[0], duration_range[1])
+            current_onset = rn.choice( possible_onsets )
+            onsets.append( current_onset )
+            durations.append( current_block_duration )
+            possible_onsets = possible_onsets[np.logical_or( possible_onsets < current_onset - sep_bwn_ons,
+                                                    possible_onsets > current_onset + sep_bwn_ons)]
+        u = np.zeros(N_pts)
+        for i,d in zip(onsets, durations):
+            u[i:i+d] = 1
+        return u, timeline, onsets, durations
+    elif dist_opt == 'fixed':
+        return 'not implemented'
+
+def hrf(t, tau1=5.4, delta1=6.0, tau2=10.8, delta2=12.0, c=0.35):  
+    t = np.copy(t)
+    gamma1 = ((t/tau1)**delta1) * np.exp(-(delta1/tau1)*(t-tau1))
+    gamma2 = c*((t/tau2)**delta2) * np.exp(-(delta2/tau2)*(t-tau2))
+    h = gamma1 - gamma2
+    return h
+
+def Hmat(h):
+    fr = np.zeros( len(h) )
+    fr[0] = h[0]
+    H = toeplitz(h, fr)
+    return H   
+   
+def get_dcm_data(SNR=12, N_nds=5, N_pts=200, TR=1, A=None, N_cluster = 1000):
+    
+    timeline = np.arange(0, TR * N_pts, TR)
+    h = hrf(timeline)
+    H = Hmat(h)    
+
+    if A == None:
+        A = -np.eye(N_nds)    
+        A[2,1] = .9
+        A[4,1] = .9
+        A[3,2] = .9
+        A[3,4] = .9
+
+    u = np.zeros(shape=(N_pts,N_nds))
+    for n in range(N_nds):
+        u[:,n],_,_,_ = get_stimulus(TR=TR, duration_range=(1,3))
+    
+    X = np.zeros(shape=(N_pts,N_nds))
+    dt = np.ones(N_nds)
+    for t in range(1,N_pts):
+        X[t,:] = X[t-1,:] + dt * ( np.dot(A,X[t-1, :]) + u[t, :] )
+
+    Y = dict()
+    U = dict()
+    Y['background'] = np.zeros(shape=(N_pts,))
+    U['background'] = np.zeros(shape=(N_pts,))
+    for n in range(N_nds):
+        key = 'n'+str(n+1)
+        s = np.dot(H, X[:,n])
+        Y[key] = s / s.max()
+        U[key] = u[:,n]
+
+    if type(N_cluster) == int:
+        N = N_cluster
+        N_cluster = dict()
+        for n in Y.keys():
+            N_cluster[n] = N
+    
+    Y_data = dict(Y)
+    U_data = dict(U)
+    noise_std = list()
+    for i,n in enumerate(Y.keys()):
+        Y_data[n] = np.reshape(Y_data[n],(N_pts,1))
+        Y_data[n] = np.tile(Y_data[n],(1,N_cluster[n]))
+        U_data[n] = np.reshape(U_data[n],(N_pts,1))
+        U_data[n] = np.tile(U_data[n],(1,N_cluster[n]))
+        noise_std.append( np.max( Y[n] ) / SNR )
+        Y_data[n] += noise_std[i] * np.random.normal(size = Y_data[n].shape)
+    Y_data['background'] = max(noise_std) * np.random.normal(size = Y_data['background'].shape)
+
+    return Y_data, U_data, H
+    
+if __name__ == "__main__":
+
+    Y_data, U_data, H = get_dcm_data()
+    Y_mat = np.hstack(Y_data.values())
+    U_mat = np.hstack(U_data.values())
+    fig, ax = plt.subplots(ncols=2)    
+    ax[0].imshow(Y_mat, aspect='auto', interpolation = 'nearest')        
+    ax[1].imshow(U_mat, aspect='auto', interpolation = 'nearest')
+    plt.tight_layout()
+    plt.show()
+
+
+
+
+
+
+
+
+   
+#def plot_nodes(timeline,u,X,Y,U):
+#    plt.figure(1)
+#    plt.imshow(A,aspect='auto',interpolation='nearest')
+#
+#    plt.figure(2)
+#    plt.imshow(u,aspect='auto',interpolation='nearest')
+#
+##    plt.figure(3)
+#    fig, ax = plt.subplots(nrows=N_nds, figsize=(6,10))    
+#    for n in range(N_nds):        
+#        markerline, stemlines, baseline = ax[n].stem(timeline, u[:,n])
+#        ax[n].hold('on')
+#        plt.setp(markerline, 'markersize', 0)
+#        plt.setp(baseline, 'color','r', 'linewidth', 2)
+#        plt.setp(stemlines, 'color','r', 'linewidth', 5)
+#        ax[n].plot(timeline,X[:,n],'green')
+#        ax[n].hold('off')
+#    plt.tight_layout()
+#    plt.show()
+#
+##    plt.figure(4)
+#    fig, ax = plt.subplots(nrows=len(Y)-1, figsize=(6,10))    
+#    nds = Y.keys()
+#    nds.remove('background')
+#    for i,n in enumerate(nds):
+#        markerline, stemlines, baseline = ax[i].stem(timeline, U[n])
+#        ax[i].hold('on')
+#        plt.setp(markerline, 'markersize', 0)
+#        plt.setp(baseline, 'color','r', 'linewidth', 2)
+#        plt.setp(stemlines, 'color','r', 'linewidth', 5)
+#        ax[i].plot(timeline,Y[n],'green')
+#        ax[i].set_ylabel(n)
+#        ax[i].hold('off')
+#    plt.tight_layout()
+#    plt.show()
+
+#def plot_data(Y_data,U):
+#    Y_mat = np.hstack(Y_data.values())
+#    plt.figure(5)
+#    plt.imshow(Y_mat,aspect='auto',interpolation='nearest')
+#    plt.show()
+#    
+#    fig, ax = plt.subplots(nrows=len(Y_data), figsize=(6,10))    
+#    for i,n in enumerate(Y_data.keys()):
+#        if n != 'background':            
+#            markerline, stemlines, baseline = ax[i].stem(timeline, U[n])
+#            ax[i].hold('on')
+#            plt.setp(markerline, 'markersize', 0)
+#            plt.setp(baseline, 'color','r', 'linewidth', 2)
+#            plt.setp(stemlines, 'color','r', 'linewidth', 5)
+#        ax[i].plot(timeline,Y_data[n][:,0],'green')
+#        ax[i].set_ylabel(n)
+#        ax[i].hold('off')
+#    plt.tight_layout()
+#    plt.show()
+
+#doplot = 'on'
+#if doplot == 'on':
+##    plot_nodes(timeline,u,X,Y,U)
+#    plot_data(Y_data,U)
+
